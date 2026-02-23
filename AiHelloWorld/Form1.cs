@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
@@ -13,7 +13,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using static AiHelloWorld.ChatBubble;
 
 namespace AiHelloWorld
@@ -22,22 +21,26 @@ namespace AiHelloWorld
     public partial class Form1 : Form
     {
 		private HttpClient client = new HttpClient();
-		private List<ChatMessage> history = new List<ChatMessage>(); 
+		private List<ChatMessage> history = new List<ChatMessage>();
 		private AudioRecorder _recorder;
 		private string audiofilePath = "C:\\Users\\xuanz\\Downloads\\whisper\\wav\\input.wav";
+		private ChatBubble _thinkingBubble;
 
+		[DllImport("user32.dll", CharSet = CharSet.Unicode)]
+		private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, string lParam);
 
 		public Form1()
         {
-            InitializeComponent(); 
-			this.Shown += (s, e) => textBox2.Focus(); 
+            InitializeComponent();
+			this.Shown += (s, e) => textBox2.Focus();
 			_recorder = new AudioRecorder(audiofilePath);
 
+			// Placeholder text in input box
+			SendMessage(textBox2.Handle, 0x1501, 1, "Type a message...");
 
 			btnPushToTalk.MouseDown += BtnPushToTalk_MouseDown;
 			btnPushToTalk.MouseUp += BtnPushToTalk_MouseUp;
-			btnPushToTalk.MouseLeave += BtnPushToTalk_MouseLeave; // safety
-			//WhisperServerStarts();
+			btnPushToTalk.MouseLeave += BtnPushToTalk_MouseLeave;
 		}
 
         private void BtnPushToTalk_MouseLeave(object sender, EventArgs e)
@@ -45,6 +48,7 @@ namespace AiHelloWorld
 			if (Control.MouseButtons == MouseButtons.Left)
 			{
 				btnPushToTalk.Text = "Talk";
+				btnPushToTalk.BackColor = Color.FromArgb(52, 199, 89);
 				StopAndProcessAsync();
 			}
 
@@ -53,6 +57,7 @@ namespace AiHelloWorld
 		private void BtnPushToTalk_MouseUp(object sender, MouseEventArgs e)
         {
 			btnPushToTalk.Text = "Talk";
+			btnPushToTalk.BackColor = Color.FromArgb(52, 199, 89);
 			StopAndProcessAsync();
 
 		}
@@ -60,6 +65,7 @@ namespace AiHelloWorld
 		private void BtnPushToTalk_MouseDown(object sender, MouseEventArgs e)
         {
 			btnPushToTalk.Text = "Listening...";
+			btnPushToTalk.BackColor = Color.FromArgb(255, 59, 48);
 			_recorder.StartRecording();
 
 		}
@@ -69,33 +75,53 @@ namespace AiHelloWorld
 			_recorder.StopRecording();
 			_recorder.Dispose();
 
-			
 			var input = WhisperTranscribe();
 			ResponseMessgae(input);
-		
+
 		}
 
 		private async void btnSend_Click(object sender, EventArgs e)
         {
 			string input = textBox2.Text;
 			textBox2.Text = "";
-
 			ResponseMessgae(input);
 		}
 
 		private async void ResponseMessgae(string input)
 		{
-			if (input == "")
+			if (string.IsNullOrWhiteSpace(input))
 				return;
+
 			history.Add(new ChatMessage { Role = "User", Content = input });
 			AddMyMessage(input);
 
-			string resultString = await DoWorkAsync();
-			var result = JsonSerializer.Deserialize<LlamaResponse>(resultString);
+			// Show thinking indicator and lock inputs
+			_thinkingBubble = new ChatBubble();
+			_thinkingBubble.MessageText = "...";
+			_thinkingBubble.SetAlignment(BubbleAlign.Left);
+			flowLayoutPanel1.Controls.Add(_thinkingBubble);
+			flowLayoutPanel1.ScrollControlIntoView(_thinkingBubble);
+			btnSend.Enabled = false;
+			btnPushToTalk.Enabled = false;
 
+			string resultString = await DoWorkAsync();
+
+			// Remove thinking indicator and unlock inputs
+			if (_thinkingBubble != null)
+			{
+				flowLayoutPanel1.Controls.Remove(_thinkingBubble);
+				_thinkingBubble.Dispose();
+				_thinkingBubble = null;
+			}
+			btnSend.Enabled = true;
+			btnPushToTalk.Enabled = true;
+
+			var result = JsonSerializer.Deserialize<LlamaResponse>(resultString);
 			history.Add(new ChatMessage { Role = "Assistant", Content = result.Response });
 			AddBotMessage(result.Response);
-		} 
+
+			textBox2.Focus();
+		}
 
 		private void AddMyMessage(string text)
 		{
@@ -147,31 +173,6 @@ namespace AiHelloWorld
 			return result;
 		}
 
-		/*private void WhisperServerStarts()
-		{
-			string whisperExe = "C:\\Users\\xuanz\\Downloads\\whisper\\whisper-server.exe";
-			string modelPath = "C:\\Users\\xuanz\\Downloads\\whisper\\models\\ggml-small.en.bin";
-
-			var process = new Process
-			{
-				StartInfo = new ProcessStartInfo
-				{
-					FileName = whisperExe,
-					Arguments = $"-m \"{modelPath}\"",
-					RedirectStandardOutput = true,
-					RedirectStandardError = true,
-					UseShellExecute = false,
-					CreateNoWindow = true
-				}
-			};
-			process.Start();
-			string output = process.StandardOutput.ReadToEnd();
-			string error = process.StandardError.ReadToEnd();
-			process.WaitForExit();
-
-			Console.WriteLine(error);
-		}*/
-
 		private string WhisperTranscribe()
 		{
 			string whisperExe = "C:\\Users\\xuanz\\Downloads\\whisper\\whisper-cli.exe";
@@ -197,22 +198,6 @@ namespace AiHelloWorld
             Console.WriteLine(error);
 			return output.Trim();
 		}
-
-		/*private async Task<string> WhisperTranscribeAsync()
-		{
-			var client1 = new HttpClient();
-			var form = new MultipartFormDataContent();
-			form.Add(new ByteArrayContent(File.ReadAllBytes(audiofilePath)), "file", "input.wav)");
-
-			var response = await client1.PostAsync(
-				"http://127.0.0.1:8080/inference", form);
-			response.EnsureSuccessStatusCode();
-
-			var json = await response.Content.ReadAsStringAsync();
-			var result = JsonSerializer.Deserialize<WhisperResponse>(json);
-
-			return result?.text?.Trim();
-		}*/
 
 		public class WhisperResponse
 		{
